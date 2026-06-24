@@ -1,0 +1,16 @@
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ include "admin-panel.fullname" . }}
+  labels:
+    app: {{ include "admin-panel.fullname" . }}
+spec:
+  host: {{ .Values.route.host | default (printf "%s-%s.%s" (include "admin-panel.fullname" .) .Values.groupName .Values.clusterDomain) }}
+  to:
+    kind: Service
+    name: {{ include "admin-panel.fullname" . }}
+  port:
+    targetPort: {{ .Values.adminpanel.service.port }}
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

@@ -1,0 +1,31 @@
+image:
+  repository: registry.sberdevices.ru/gigaoper/browser-agent-service-admin-panel
+  tag: develop-latest
+
+adminpanel:
+  enabled: true
+  name: "adminpanel"
+  replicas: 3
+  ns: "pd-gigaoper-utils"
+  service:
+    port: 8080
+  configmap:
+    name: "adminpanel-config"
+    basURL: "https://serviceapi-preprod-gigaoper.apps.advospd.sberdevices.ru"
+    traceURL: "https://trace-preprod-gigaoper.apps.advospd.sberdevices.ru"
+    benchURL: "https://orchestrator-preprod-gigaoper.apps.advdagod.sberdevices.ru"
+  imagePullSecrets:
+    name: "gigaoper-openshift-adminpanel"
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "256Mi"
+    limits:
+      cpu: "250m"
+      memory: "256Mi"
+clusterDomain: "apps.advospd.sberdevices.ru"
+groupName: "gigaoper"
+route:
+  host: ""
+  old:
+    enabled: false

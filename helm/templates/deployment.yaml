@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "admin-panel.fullname" . }}
+  namespace: "{{ .Values.adminpanel.ns }}"
+  labels:
+    app: {{ include "admin-panel.fullname" . }}
+spec:
+  replicas: {{ .Values.adminpanel.replicas }}
+  selector:
+    matchLabels:
+      app: {{ include "admin-panel.fullname" . }}
+  template:
+    metadata:
+      annotations:
+        checksum/app-config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/nginx-config: {{ include (print $.Template.BasePath "/configmap-nginx.yaml") . | sha256sum }}
+      labels:
+        app: {{ include "admin-panel.fullname" . }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+      volumes:
+        - name: nginx-config
+          configMap:
+            name: {{ include "admin-panel.fullname" . }}-nginx-config
+        - name: config-volume
+          configMap:
+            name: {{ include "admin-panel.fullname" . }}-config
+            defaultMode: 0644
+        - name: nginx-cache
+          emptyDir: {}
+        - name: nginx-run
+          emptyDir: {}
+      containers:
+        - name: {{ include "admin-panel.fullname" . }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: Always
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          ports:
+            - containerPort: {{ .Values.adminpanel.service.port }}
+          resources:
+            requests:
+              cpu: {{ .Values.adminpanel.resources.requests.cpu }}
+              memory: {{ .Values.adminpanel.resources.requests.memory }}
+            limits:
+              cpu: {{ .Values.adminpanel.resources.limits.cpu }}
+              memory: {{ .Values.adminpanel.resources.limits.memory }}
+          volumeMounts:
+            - name: nginx-config
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+            - name: config-volume
+              mountPath: /usr/share/nginx/html/config.json
+              subPath: config.json
+              readOnly: true
+            - name: nginx-cache
+              mountPath: /var/cache/nginx
+            - name: nginx-run
+              mountPath: /var/run
+      imagePullSecrets:
+        - name: {{ .Values.adminpanel.imagePullSecrets.name }}

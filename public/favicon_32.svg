@@ -1,0 +1,22 @@
+<svg width="32.000000" height="32.000000" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+	<desc>
+			Created with Pixso.
+	</desc>
+	<defs>
+		<clipPath id="clip728_200113">
+			<rect id="Zvonar_32_32" width="32.000000" height="32.000000" fill="white" fill-opacity="0"/>
+		</clipPath>
+		<linearGradient x1="16.025757" y1="18.650705" x2="29.051369" y2="22.360868" id="paint_linear_728_200118_0" gradientUnits="userSpaceOnUse">
+			<stop stop-color="#52F2C5"/>
+			<stop offset="1.000000" stop-color="#C5FC5F"/>
+		</linearGradient>
+	</defs>
+	<g clip-path="url(#clip728_200113)">
+		<path id="path" d="M14.11 15.03C16.66 12.5 16.66 8.41 14.11 5.89C11.57 3.36 7.45 3.36 4.9 5.89C2.36 8.41 2.36 12.5 4.9 15.03C7.45 17.55 11.57 17.55 14.11 15.03Z" fill="#260F42" fill-opacity="1.000000" fill-rule="nonzero"/>
+		<path id="path" d="M22.53 16.92C26.13 16.92 29.05 14.03 29.05 10.46C29.05 6.89 26.13 4 22.53 4C18.94 4 16.02 6.89 16.02 10.46C16.02 14.03 18.94 16.92 22.53 16.92Z" fill="#260F42" fill-opacity="1.000000" fill-rule="nonzero"/>
+		<path id="path" d="M9.51 24.51C13.1 24.51 16.02 22.81 16.02 20.72C16.02 18.62 13.1 16.92 9.51 16.92C5.91 16.92 3 18.62 3 20.72C3 22.81 5.91 24.51 9.51 24.51Z" fill="#260F42" fill-opacity="1.000000" fill-rule="nonzero"/>
+		<path id="path" d="M22.53 24.51C26.13 24.51 29.05 22.81 29.05 20.72C29.05 18.62 26.13 16.92 22.53 16.92C18.94 16.92 16.02 18.62 16.02 20.72C16.02 22.81 18.94 24.51 22.53 24.51Z" fill="url(#paint_linear_728_200118_0)" fill-opacity="1.000000" fill-rule="nonzero"/>
+		<path id="path" d="M9.51 28.31C13.1 28.31 16.02 27.46 16.02 26.41C16.02 25.36 13.1 24.51 9.51 24.51C5.91 24.51 3 25.36 3 26.41C3 27.46 5.91 28.31 9.51 28.31Z" fill="#260F42" fill-opacity="1.000000" fill-rule="nonzero"/>
+		<path id="path" d="M22.53 28.31C26.13 28.31 29.05 27.46 29.05 26.41C29.05 25.36 26.13 24.51 22.53 24.51C18.94 24.51 16.02 25.36 16.02 26.41C16.02 27.46 18.94 28.31 22.53 28.31Z" fill="#260F42" fill-opacity="1.000000" fill-rule="nonzero"/>
+	</g>
+</svg>

@@ -1,0 +1,489 @@
+include:
+  - project: 'public-repository/gitlab-ci'
+    file:
+      - 'prepare/global_variables.yml'
+
+stages:
+  - build
+  - prepare
+  - pre-merge
+  - promote
+  - cybersecurity
+  - send_cybersecurity_reports
+  - deploy
+  - notification
+
+variables:
+  IMAGE_TAG: ${CI_REGISTRY}/${CI_PROJECT_PATH}:${CI_COMMIT_REF_SLUG}-${CI_COMMIT_SHORT_SHA}
+  IMAGE_TAG_CI_COMMIT_SHA: ${CI_COMMIT_REF_SLUG}-${CI_COMMIT_SHORT_SHA}
+  APP_DIR: "src"
+  HELM_RELEASE_PREFIX: "adminpanel"
+  APP_NAME: "gc-adminpanel"
+  TAG: kubernetes-buildah-std
+  TAG_PROD: p-deployer
+  CI_API_V4_URL: "https://git.sberdevices.ru/api/v4/"
+
+
+build_image:
+  stage: build
+  image: ${BUILDAH_IMAGE}
+  tags:
+    - $TAG
+  variables:
+    CLOUD_DOCKERFILE_PATH: Dockerfile
+    BUILDAH_LAYERS: "true"
+    STORAGE_DRIVER: "vfs"
+  script:
+    - buildah --version
+    - ls -la
+    - echo "Build Image:"
+    - echo $IMAGE_TAG
+    - echo $CI_JOB_TOKEN | buildah login -u $CI_REGISTRY_USER --password-stdin $CI_REGISTRY || true
+    - buildah build -t $IMAGE_TAG -f $APP_DIR/Dockerfile .
+    - buildah push $IMAGE_TAG
+  rules:
+    - if: '$REDEPLOY_ONLY'
+      when: never
+    - if: "$CI_COMMIT_BRANCH =~ /^(main|develop|hotfix|feature).*$/"
+      changes:
+        - "$APP_DIR/**/*"
+        - "public/**/*"
+        - "*.json"
+        - "*.ts"
+      when: on_success
+    - when: never
+
+deploy_to_openshift_predev:
+  stage: deploy
+  image: ${HELM_IMAGE}
+  environment: predev
+  tags:
+    - ${TAG}
+  variables:
+    HELM_SET_ARGS: >
+      --history-max 5
+      --set image.tag=$IMAGE_TAG_CI_COMMIT_SHA
+  script:
+    - RELEASE_NAME="${HELM_RELEASE_PREFIX}-${CI_COMMIT_REF_SLUG}"
+    - echo $RELEASE_NAME
+    - oc login $OPENSHIFT_SERVER --token=$OPENSHIFT_TOKEN --insecure-skip-tls-verify=true
+    - oc project $OPENSHIFT_PROJECT
+    - helm upgrade --install $RELEASE_NAME ./helm --namespace $OPENSHIFT_PROJECT --values ./helm/values-$CI_ENVIRONMENT_NAME.yaml $HELM_SET_ARGS
+    - oc get route -n $OPENSHIFT_PROJECT
+  rules:
+    - if: "$REDEPLOY_ONLY"
+      when: never
+    - if: "$CI_COMMIT_BRANCH =~ /^(feature).*$/"
+      changes:
+        - "$APP_DIR/**/*"
+        - "public/**/*"
+        - "*.json"
+        - "*.ts"
+      when: on_success
+    - when: never
+
+deploy_to_openshift_dev:
+  stage: deploy
+  image: ${HELM_IMAGE}
+  environment: dev
+  tags:
+    - ${TAG}
+  variables:
+    HELM_SET_ARGS: >
+      --history-max 5
+      --set image.tag=$IMAGE_TAG_CI_COMMIT_SHA
+  script:
+    - RELEASE_NAME="${HELM_RELEASE_PREFIX}-dev"
+    - echo $RELEASE_NAME
+    - echo $IMAGE_TAG_CI_COMMIT_SHA
+    - oc login $OPENSHIFT_SERVER --token=$OPENSHIFT_TOKEN --insecure-skip-tls-verify=true
+    - oc project $OPENSHIFT_PROJECT
+    - helm upgrade --install $RELEASE_NAME ./helm --namespace $OPENSHIFT_PROJECT --values ./helm/values-$CI_ENVIRONMENT_NAME.yaml $HELM_SET_ARGS
+    - oc get route -n $OPENSHIFT_PROJECT
+  rules:
+    - if: "$REDEPLOY_ONLY"
+      when: never
+    - if: $CI_COMMIT_BRANCH == "develop"
+      changes:
+        - "$APP_DIR/**/*"
+        - "public/**/*"
+        - "*.json"
+        - "*.ts"
+      when: on_success
+    - when: never
+
+redeploy_to_dropapp_dev:
+  stage: deploy
+  image: ${HELM_IMAGE}
+  environment: dev
+  tags:
+    - ${TAG}
+  variables:
+    HELM_SET_ARGS: >
+      --history-max 5
+      --set image.tag=$REDEPLOY_IMAGE_TAG_DEV
+  script:
+    - RELEASE_NAME="${HELM_RELEASE_PREFIX}-dev"
+    - echo "Re-deploying $RELEASE_NAME with image:" $REDEPLOY_IMAGE_TAG_DEV
+    - oc login $OPENSHIFT_SERVER --token=$OPENSHIFT_TOKEN --insecure-skip-tls-verify=true
+    - oc project $OPENSHIFT_PROJECT
+    - helm upgrade --install $RELEASE_NAME ./helm --namespace $OPENSHIFT_PROJECT --values ./helm/values-$CI_ENVIRONMENT_NAME.yaml $HELM_SET_ARGS
+    - oc get route -n $OPENSHIFT_PROJECT
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "web" && $REDEPLOY_ONLY && $REDEPLOY_IMAGE_TAG_DEV'
+      when: on_success
+
+check_jira_status:
+  stage: pre-merge
+  image: ${GIT_IMAGE}
+  environment: dev
+  tags:
+    - kubernetes-lrg
+  before_script:
+    - git config --global --add safe.directory "$CI_PROJECT_DIR"
+  script:
+    - |
+      MSG="$CI_MERGE_REQUEST_TITLE"
+      echo "Parsing message: $MSG"
+      
+      ISSUES=$(echo "$MSG" | grep -oE '\[([A-Z]+-[0-9]+)\]' | tr -d '[]' | sort -u)
+      if [ -z "$ISSUES" ]; then
+        echo "ERROR: No Jira tasks was founded in message. Expected format: [PROJ-1] or [PROJ-1],[PROJ-2]"
+        exit 1
+      fi
+      echo "Founded tasks: $ISSUES"
+      
+      for ISSUE in $ISSUES; do
+        echo "Checking status of $ISSUE..."
+        RESPONSE=$(curl -s --max-time 10 -u "$JIRA_USER:$JIRA_PASS" \
+          -H "Accept: application/json" \
+          "$JIRA_URL/rest/api/2/issue/$ISSUE?fields=status")
+      
+        if echo "$RESPONSE" | grep -q '"errorMessages"'; then
+          echo "ERROR: Jira issue $ISSUE not found or inaccessible"
+          echo "Response: $RESPONSE"
+          exit 1
+        fi
+      
+        STATUS=$(echo "$RESPONSE" | jq -r '.fields.status.name' 2>/dev/null)
+      
+        if [ -z "$STATUS" ] || [ "$STATUS" = "null" ]; then
+          echo "ERROR: Failed to parse status for $ISSUE"
+          echo "Response: $RESPONSE"
+          exit 1
+        fi
+      
+        echo "Status of $ISSUE: $STATUS"
+      
+        case "$STATUS" in
+          "Done"|"Won't Do"|"Fixed"|"Won't Fix"|"Duplicate"|"Cannot Reproduce"|"Not a Bug"|"Not relevant"|"Invalid"|"Incomplete"|"Rejected"|"Closed"|"Accepted"|"Defect"|"Declined"|"Canceled")
+            echo "ERROR: Jira issue $ISSUE is '$STATUS' - cannot merge to develop"
+            exit 1
+            ;;
+        esac
+      done
+      
+      echo "All issues are open — merge allowed"
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME =~ /^(feature).*$/ && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "develop"'
+      when: always
+
+container-security:
+  stage: cybersecurity
+  image: registry.sberdevices.ru/appsec-public/containers/container-security:stable
+  tags:
+    - kubernetes-lrg
+  variables:
+    CLOUD_CONTAINER_SECURITY_IMAGE: ${CI_REGISTRY}/${CI_PROJECT_PATH}:${CI_COMMIT_REF_SLUG}-${CI_COMMIT_SHORT_SHA}
+  script:
+    - source /opt/container-security.sh
+  artifacts:
+    paths:
+      - container-security/*
+  rules:
+    - if: "$REDEPLOY_ONLY"
+      when: never
+    - if: '($CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main") || $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/'
+      when: on_success
+    - when: never
+
+sast:
+  stage: cybersecurity
+  image: registry.sberdevices.ru/appsec-public/containers/sast:stable
+  tags:
+    - kubernetes-lrg
+  script:
+    - source /opt/sast.sh
+  artifacts:
+    paths:
+      - sast-reports/*
+  rules:
+    - if: "$REDEPLOY_ONLY"
+      when: never
+    - if: '($CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main") || $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/'
+      when: on_success
+    - when: never
+
+sca:
+  stage: cybersecurity
+  image: registry.sberdevices.ru/appsec-public/containers/sca:stable
+  tags:
+    - kubernetes-lrg
+  variables:
+    HTTP_PROXY: "http://proxy.sberdevices.ru:3128"
+    HTTPS_PROXY: "http://proxy.sberdevices.ru:3128"
+  script:
+    - source /opt/sca.sh
+  artifacts:
+    paths:
+      - sca-reports/*
+  rules:
+    - if: "$REDEPLOY_ONLY"
+      when: never
+    - if: '($CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main") || $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/'
+      when: on_success
+    - when: never
+
+
+sast-report:
+  stage: send_cybersecurity_reports
+  image: registry.sberdevices.ru/appsec-public/containers/sast:stable
+  tags:
+    - kubernetes-std
+  script:
+    - source /opt/push-sast.sh
+  rules:
+    - if: "$REDEPLOY_ONLY"
+      when: never
+    - if: '($CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main") || $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/'
+      when: on_success
+    - when: never
+  needs:
+    - job: sast
+      artifacts: true
+
+sca-report:
+  stage: send_cybersecurity_reports
+  image: registry.sberdevices.ru/appsec-public/containers/sca:stable
+  tags:
+    - kubernetes-std
+  script:
+    - source /opt/push-sca.sh
+  rules:
+    - if: "$REDEPLOY_ONLY"
+      when: never
+    - if: '($CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main") || $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/'
+      when: on_success
+    - when: never
+  needs:
+    - job: sca
+      artifacts: true
+
+deploy_to_openshift_preprod:
+  stage: deploy
+  image: ${HELM_IMAGE}
+  environment: preprod
+  tags:
+    - ${TAG}
+  variables:
+    HELM_SET_ARGS: >
+      --history-max 5
+      --set image.tag=$IMAGE_TAG_CI_COMMIT_SHA
+  script:
+    - RELEASE_NAME="${HELM_RELEASE_PREFIX}-preprod"
+    - echo "Re-deploying $RELEASE_NAME with image:" $REDEPLOY_IMAGE_TAG_PD
+    - oc login $OPENSHIFT_SERVER --token=$OPENSHIFT_TOKEN --insecure-skip-tls-verify=true
+    - oc project $OPENSHIFT_PROJECT
+    - helm upgrade --install $RELEASE_NAME ./helm --namespace $OPENSHIFT_PROJECT --values ./helm/values-$CI_ENVIRONMENT_NAME.yaml $HELM_SET_ARGS
+    - oc get route -n $OPENSHIFT_PROJECT
+  rules:
+    - if: "$REDEPLOY_ONLY"
+      when: never
+    - if: "$CI_COMMIT_BRANCH =~ /^(main|hotfix).*$/"
+      changes:
+        - "$APP_DIR/**/*"
+        - "public/**/*"
+        - "*.json"
+        - "*.ts"
+      when: on_success
+    - when: never
+
+redeploy_to_openshift_preprod:
+  stage: deploy
+  image: ${HELM_IMAGE}
+  environment: preprod
+  tags:
+    - ${TAG}
+  variables:
+    HELM_SET_ARGS: >
+      --history-max 5
+      --set image.tag=$REDEPLOY_IMAGE_TAG_PD
+  script:
+    - RELEASE_NAME="${HELM_RELEASE_PREFIX}-preprod"
+    - echo "Re-deploying $RELEASE_NAME with image:" $REDEPLOY_IMAGE_TAG_PD
+    - oc login $OPENSHIFT_SERVER --token=$OPENSHIFT_TOKEN --insecure-skip-tls-verify=true
+    - oc project $OPENSHIFT_PROJECT
+    - helm upgrade --install $RELEASE_NAME ./helm --namespace $OPENSHIFT_PROJECT --values ./helm/values-$CI_ENVIRONMENT_NAME.yaml $HELM_SET_ARGS
+    - oc get route -n $OPENSHIFT_PROJECT
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "web" && $REDEPLOY_ONLY && $REDEPLOY_IMAGE_TAG_PD'
+      when: on_success
+
+#######################################################################################################################
+############################################# Запуск деплоя на PROD-стенд #############################################
+#######################################################################################################################
+
+checking-tag-source:
+  stage: prepare
+  image: ${GIT_IMAGE}
+  environment: prod
+  tags:
+    - kubernetes-std
+  before_script:
+    - git config --global --add safe.directory "$CI_PROJECT_DIR"
+  script:
+    - |
+      echo "Checking: TAG $CI_COMMIT_TAG must be from MAIN or HOTFIX branches or based on main/hotfix"
+      git fetch origin main --quiet
+
+      if git merge-base --is-ancestor origin/main $CI_COMMIT_SHA 2>/dev/null; then
+        echo "Commit is based on main — OK"
+        exit 0
+      fi
+
+      refs=$(curl --silent --header "PRIVATE-TOKEN: $GITLAB_API_TOKEN" \
+        "$CI_API_V4_URL/projects/$CI_PROJECT_ID/repository/commits/$CI_COMMIT_SHA/refs?type=branch")
+      if echo "$refs" | jq -r '.[].name' | grep -q '^main$'; then
+        echo "Tag is on main — OK"
+        exit 0
+      elif echo "$refs" | jq -r '.[].name' | grep -q '^hotfix/'; then
+        echo "Tag is on hotfix/* — OK"
+        exit 0
+      else
+        echo "Tag is not on main, hotfix/*, nor based on main — REJECT"
+        exit 1
+      fi
+  rules:
+    - if: "$REDEPLOY_ONLY"
+      when: never
+    - if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+(-hotfix\.\d+)?$/'
+      when: on_success
+    - when: never
+
+promote-image-to-prod:
+  stage: promote
+  image: ${BUILDAH_IMAGE}
+  environment: prod
+  tags:
+    - kubernetes-buildah-std
+  script:
+    - echo $CI_JOB_TOKEN | buildah login -u $CI_REGISTRY_USER --password-stdin $CI_REGISTRY
+    - IMAGE_BASE="${CI_REGISTRY}/${CI_PROJECT_PATH}"
+    - COMMIT_TAG_IMAGE="$IMAGE_BASE:$CI_COMMIT_TAG"
+    - MAIN_SHA_IMAGE="$IMAGE_BASE:main-${CI_COMMIT_SHORT_SHA}"
+    - BRANCH_SHA_IMAGE="$IMAGE_BASE:${CI_COMMIT_REF_SLUG}-${CI_COMMIT_SHORT_SHA}"
+
+    - |
+      if buildah pull $MAIN_SHA_IMAGE; then
+        echo "Using main-* image: $MAIN_SHA_IMAGE"
+        buildah tag $MAIN_SHA_IMAGE $COMMIT_TAG_IMAGE
+      elif buildah pull $BRANCH_SHA_IMAGE; then
+        echo "Using branch-* image: $BRANCH_SHA_IMAGE"
+        buildah tag $BRANCH_SHA_IMAGE $COMMIT_TAG_IMAGE
+      else
+        echo "Failed to pull image from main-* or branch-*"
+        exit 1
+      fi
+    - buildah push $COMMIT_TAG_IMAGE
+  rules:
+    - if: "$REDEPLOY_ONLY"
+      when: never
+    - if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+(-hotfix\.\d+)?$/'
+      when: on_success
+    - when: never
+
+deploy_to_openshift_prod:
+  stage: deploy
+  image: ${HELM_IMAGE}
+  environment: prod
+  tags:
+    - ${TAG_PROD}
+  variables:
+    HELM_SET_ARGS: >
+      --history-max 5
+      --set image.tag=$CI_COMMIT_TAG
+  script:
+    - RELEASE_NAME="${HELM_RELEASE_PREFIX}-preprod"
+    - echo "Re-deploying $RELEASE_NAME with image:" $REDEPLOY_IMAGE_TAG_PD
+    - oc login $OPENSHIFT_SERVER --token=$OPENSHIFT_TOKEN --insecure-skip-tls-verify=true
+    - oc project $OPENSHIFT_PROJECT
+    - helm upgrade --install $RELEASE_NAME ./helm --namespace $OPENSHIFT_PROJECT --values ./helm/values-$CI_ENVIRONMENT_NAME.yaml $HELM_SET_ARGS
+    - oc get route -n $OPENSHIFT_PROJECT
+  rules:
+    - if: "$REDEPLOY_ONLY"
+      when: never
+    - if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+(-hotfix\.\d+)?$/'
+      when: manual
+    - when: never
+  needs:
+    - job: promote-image-to-prod
+
+send-deploy-notification:
+  stage: notification
+  image: ${ANSIBLE_IMAGE}
+  tags:
+    - kubernetes-std
+  script:
+    - |
+      if [[ "$CI_COMMIT_BRANCH" == "develop" ]]; then
+        ENVIRONMENT="dev"
+        STAND_NAME="dev"
+        DEPLOY_TYPE="merge-request"
+      elif [[ "$CI_COMMIT_BRANCH" == "main" ]]; then
+        ENVIRONMENT="preprod"
+        STAND_NAME="preprod"
+        DEPLOY_TYPE="merge-request"
+      elif [[ "$CI_COMMIT_BRANCH" =~ ^hotfix ]] && [ -z "$CI_COMMIT_TAG" ]; then
+        ENVIRONMENT="preprod"
+        STAND_NAME="preprod"
+        DEPLOY_TYPE="push"
+      elif [[ "$CI_COMMIT_TAG" =~ ^v ]]; then
+        ENVIRONMENT="prod"
+        STAND_NAME="prod"
+        DEPLOY_TYPE="tag-release"
+      else
+        echo "What is it? Skipping..."
+        exit 0
+      fi
+
+      COMMIT_MSG=$(echo "$CI_COMMIT_MESSAGE" | tr '\n' ' ' | sed 's/"/\\"/g' | cut -c1-200)
+      PIPELINE_URL="$CI_PROJECT_URL/-/pipelines/$CI_PIPELINE_ID"
+      if [ -n "$CI_COMMIT_TAG" ]; then
+        IMAGE_TAG=${CI_COMMIT_TAG}
+      else
+        IMAGE_TAG="${CI_COMMIT_REF_SLUG}-${CI_COMMIT_SHORT_SHA}"
+      fi
+
+      PAYLOAD=$(jq -n \
+        --arg stand "$STAND_NAME" \
+        --arg image "$IMAGE_TAG" \
+        --arg user "$GITLAB_USER_NAME" \
+        --arg msg "$COMMIT_MSG" \
+        --arg pipe_url "$PIPELINE_URL" \
+        --arg project_name "$(echo $CI_PROJECT_NAME | tr '-' ' ')" \
+        '{
+          text: "*[\($stand)] Деплой завершён*\n\n*Проект:* \($project_name)\n*Образ:* \($image)\n*Кто:* \($user)\n*Сообщение:* \($msg)\n<\($pipe_url)|Отработавший Pipeline>"
+        }')
+
+      echo "$PAYLOAD"
+      curl -s -X POST $WEBHOOK_LINK -H 'Content-Type: application/json' -d "$PAYLOAD"
+  rules:
+    - if: "$CI_COMMIT_BRANCH =~ /^(main|develop|hotfix).*$/"
+      changes:
+        - "$APP_DIR/**/*"
+        - "public/**/*"
+        - "*.json"
+        - "*.ts"
+      when: on_success
+    - if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+(-hotfix\.\d+)?$/'
+      when: on_success

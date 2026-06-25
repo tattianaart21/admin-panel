@@ -70,16 +70,28 @@ export const Track = styled.div<{ $width: number }>`
   width: ${({ $width }) => $width}px;
   height: 24px;
   flex-shrink: 0;
+  background: rgba(0, 0, 0, 0.03);
+  border-radius: 8px;
+`;
+
+export const BarSlot = styled.div<{ $left: number; $width: number; $minPx?: number }>`
+  position: absolute;
+  top: 2px;
+  left: ${({ $left }) => $left}%;
+  width: ${({ $width }) => $width}%;
+  min-width: ${({ $minPx }) => $minPx ?? 4}px;
+  height: 20px;
 `;
 
 export const Bar = styled.button<{ $type: "model" | "plugin"; $error: boolean; $selected?: boolean }>`
-  position: absolute;
-  top: 2px;
-  height: 20px;
+  position: relative;
+  width: 100%;
+  height: 100%;
   border: none;
   border-radius: 6px;
   cursor: pointer;
   padding: 0;
+  display: block;
   background: ${({ $type }) => ($type === "model" ? "#7B61FF" : "#FF8C42")};
   box-shadow: ${({ $error, $selected }) => {
     if ($error) return "inset 0 0 0 2px #FF293E";

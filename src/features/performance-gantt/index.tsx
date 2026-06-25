@@ -2,10 +2,9 @@ import { useMemo } from "react";
 import { BodyS, Button, Chip } from "@salutejs/sdds-platform-ai";
 import type { ITimelineSegment } from "@/entities/trace-performance";
 import { ModelAvatar } from "@/features/model-avatar";
-import { Tooltip } from "@/shared/ui/tooltip";
 import * as UI from "./ui.styles";
 
-const MIN_BAR_PX = 4;
+const MIN_BAR_PCT = 0.4;
 const ROW_HEIGHT = 40;
 const LABEL_WIDTH = 200;
 
@@ -75,8 +74,8 @@ export function PerformanceGantt({
 
           {segments.map((seg) => {
             const leftPct = (seg.startOffsetS / totalDurationS) * 100;
-            const widthPct = Math.max((seg.durationS / totalDurationS) * 100, 0.15);
-            const widthPx = Math.max((seg.durationS / totalDurationS) * chartWidthPx, MIN_BAR_PX);
+            const widthPct = Math.max((seg.durationS / totalDurationS) * 100, MIN_BAR_PCT);
+            const minPx = seg.durationS < 0.3 ? 10 : 4;
             const selected = selectedSegmentId === seg.id;
 
             return (
@@ -88,20 +87,16 @@ export function PerformanceGantt({
                   <BodyS>{seg.label}</BodyS>
                 </UI.Label>
                 <UI.Track $width={chartWidthPx}>
-                  <Tooltip text={formatTooltip(seg)}>
+                  <UI.BarSlot $left={leftPct} $width={widthPct} $minPx={minPx}>
                     <UI.Bar
                       type="button"
                       $type={seg.type}
                       $error={isError(seg.status)}
                       $selected={selected}
-                      style={{
-                        left: `${leftPct}%`,
-                        width: `${widthPct}%`,
-                        minWidth: widthPx < MIN_BAR_PX ? MIN_BAR_PX : undefined,
-                      }}
+                      title={formatTooltip(seg)}
                       onClick={() => onSegmentClick?.(seg)}
                     />
-                  </Tooltip>
+                  </UI.BarSlot>
                 </UI.Track>
               </UI.Row>
             );
